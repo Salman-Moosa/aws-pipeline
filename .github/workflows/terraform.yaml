@@ -70,18 +70,9 @@ jobs:
           if [ -n "$TF_MODULES_TOKEN" ]; then
             git config --global url."https://x-access-token:${TF_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
-      
+
       # Short-lived AWS credentials via OIDC. No stored access keys.
       # Needed for both the S3 backend and the plan itself.
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          role-session-name: gha-tf-plan-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-          retry-max-attempts: 1
-
-      # Install pinned Terraform. Wrapper off so output is plain text.
       - name: Debug OIDC claims
         run: |
           TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -91,7 +82,14 @@ jobs:
           p=sys.argv[1].split('.')[1]; p+='='*(-len(p)%4)
           c=json.loads(base64.urlsafe_b64decode(p))
           print({k:c.get(k) for k in ('iss','aud','sub')})" "$TOKEN"
-       
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: gha-tf-plan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          retry-max-attempts: 1
 
       # Install pinned Terraform. Wrapper off so output is plain text.
       - name: Setup Terraform
