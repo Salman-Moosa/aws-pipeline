@@ -3,7 +3,7 @@
 #######
 # Creates the VPC with public, private (app) and database subnet tiers.
 module "vpc" {
-  source = "git::https://github.com/Wanderfy/terraform-modules.git//aws/vpc?ref=v0.1.2"
+  source = "git::https://github.com/Salman-Moosa/aws-module.git//vpc?ref=main"
 
   name = "${local.name_prefix}-vpc"
   cidr = var.vpc_cidr

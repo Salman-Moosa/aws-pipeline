@@ -34,10 +34,13 @@ locals {
     }
   }
 
+  # Service ports used by subnet ACL rules before those service modules are added.
+  aurora_port = 5432
+  valkey_port = 6379
+
   # # Aurora PostgreSQL
   # aurora_engine_version = "18.6"
   # aurora_database_name  = local.project
-  # aurora_port           = 5432
   # aurora_cluster_parameters = [
   #   { name = "rds.force_ssl", value = "1" },
   #   { name = "log_min_duration_statement", value = "1000" },
@@ -50,7 +53,6 @@ locals {
 
   # # ElastiCache (Valkey)
   # valkey_engine_version     = "9.1"
-  # valkey_port               = 6379
   # valkey_maintenance_window = "sun:05:00-sun:06:00"
   # valkey_snapshot_window    = "03:00-04:00"
 }
