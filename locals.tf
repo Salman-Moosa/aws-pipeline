@@ -22,9 +22,6 @@ locals {
   database_subnets = [for i, _ in local.azs : cidrsubnet(var.vpc_cidr, 8, i + 11)] # /24: x.x.11-13.0
   private_subnets  = [for i, _ in local.azs : cidrsubnet(var.vpc_cidr, 4, i + 1)]  # /20: x.x.16.0, x.x.32.0, x.x.48.0
 
-  # App subnets allowed to reach Aurora and Valkey (EKS nodes and Fargate pods), keyed by a static name
-  app_cidr_blocks = { for i, az in local.azs : "private-${az}" => local.private_subnets[i] }
-
   # VPC endpoints: the gateway endpoint is free and keeps S3 traffic off the NAT gateway
   vpc_endpoints = {
     s3 = {

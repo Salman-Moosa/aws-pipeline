@@ -3,7 +3,7 @@
 #######
 # Creates the VPC with public, private (app) and database subnet tiers.
 module "vpc" {
-  source = "git::https://github.com/Salman-Moosa/aws-module.git//vpc?ref=main"
+  source = "git::https://github.com/Salman-Moosa/aws-module.git//vpc?ref=56eec78108cce7bd0cfe8e724c4f4c43445ac285"
 
   name = "${local.name_prefix}-vpc"
   cidr = var.vpc_cidr
