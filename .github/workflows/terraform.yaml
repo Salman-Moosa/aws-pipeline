@@ -91,11 +91,7 @@ jobs:
           p=sys.argv[1].split('.')[1]; p+='='*(-len(p)%4)
           c=json.loads(base64.urlsafe_b64decode(p))
           print({k:c.get(k) for k in ('iss','aud','sub')})" "$TOKEN"
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          role-session-name: gha-tf-plan-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-          retry-max-attempts: 1
+       
 
       # Install pinned Terraform. Wrapper off so output is plain text.
       - name: Setup Terraform
