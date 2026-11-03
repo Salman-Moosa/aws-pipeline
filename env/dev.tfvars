@@ -3,7 +3,7 @@ environment = "dev"
 
 # VPC
 vpc_cidr           = "10.10.0.0/16"
-single_nat_gateway = true
+single_nat_gateway = false
 enable_flow_log    = false
 
 #only testing vpc rn
