@@ -1,6 +1,12 @@
----
+# Terraform CI: plan only (apply intentionally not included yet)
 name: Terraform
 
+# ---------------------------------------------------------------
+# Triggers
+# - pull_request: plan against dev for every PR
+# - push to main: plan against dev after merge
+# - workflow_dispatch: manually pick an environment
+# ---------------------------------------------------------------
 on:
   pull_request:
   push:
@@ -17,26 +23,47 @@ on:
           - prod
         default: dev
 
-jobs:
-  tf:
-    runs-on: ubuntu-latest
-    env:
-      TF_ENVIRONMENT: ${{ inputs.environment || 'dev' }}
-      TF_CLI_ARGS_init: -backend-config=backend/${{ inputs.environment || 'dev' }}.hcl
-      TF_CLI_ARGS_plan: -var-file=env/${{ inputs.environment || 'dev' }}.tfvars
-      TF_CLI_ARGS_apply: -var-file=env/${{ inputs.environment || 'dev' }}.tfvars
+# ---------------------------------------------------------------
+# Permissions: minimum needed
+# - id-token: lets the job request an OIDC token to assume the AWS role
+# - contents: read-only checkout
+# ---------------------------------------------------------------
+permissions:
+  id-token: write
+  contents: read
 
-    permissions:
-      actions: read # Required to identify workflow run.
-      checks: write # Required to add status summary.
-      contents: read # Required to checkout repository.
-      pull-requests: write # Required to add PR comment.
+# ---------------------------------------------------------------
+# Concurrency: one run per environment at a time.
+# Cancel-in-progress is off so a running plan is never killed midway.
+# ---------------------------------------------------------------
+concurrency:
+  group: terraform-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+# ---------------------------------------------------------------
+# Single source of truth for the environment.
+# ENV drives both the backend file and the tfvars file,
+# so dev.hcl is always paired with dev.tfvars.
+# ---------------------------------------------------------------
+env:
+  ENV: ${{ inputs.environment || 'dev' }}
+  AWS_REGION: ca-central-1
+  AWS_ROLE_ARN: arn:aws:iam::096925074508:role/infra-terraform-salman-test
+
+jobs:
+  plan:
+    name: Plan (${{ inputs.environment || 'dev' }})
+    runs-on: ubuntu-latest
 
     steps:
+      # Get the repo code
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Configure private Terraform module access
+      # Lets `terraform init` download the private wrapper module.
+      # Skipped if the secret isn't set. Token should be read-only,
+      # scoped to the module repo only.
+      - name: Configure private module access
         env:
           TF_MODULES_TOKEN: ${{ secrets.TF_MODULES_TOKEN }}
         run: |
@@ -44,64 +71,54 @@ jobs:
             git config --global url."https://x-access-token:${TF_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
 
-      - name: Setup TF
+      # Short-lived AWS credentials via OIDC. No stored access keys.
+      # Needed for both the S3 backend and the plan itself.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: gha-tf-plan-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Install pinned Terraform. Wrapper off so output is plain text.
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~> 1.17.0"
           terraform_wrapper: false
 
-      - name: Initialize Terraform
-        working-directory: .
-        run: terraform init -input=false
+      # Pick the state backend for this environment
+      # (backend.tf is a partial S3 config; bucket/key/etc. come from the .hcl).
+      - name: Terraform init
+        run: terraform init -input=false -backend-config=backend/${ENV}.hcl
 
-      - name: Check Terraform formatting
-        if: ${{ github.event_name == 'pull_request' }}
-        working-directory: .
+      # Fail fast on style or syntax problems (cheap checks)
+      - name: Terraform fmt check
         run: terraform fmt -check -recursive
 
-      - name: Validate Terraform
-        if: ${{ github.event_name == 'pull_request' }}
-        working-directory: .
+      - name: Terraform validate
         run: terraform validate
 
+      # Linting. Findings fail the job.
       - name: Setup TFLint
-        if: ${{ github.event_name == 'pull_request' }}
         uses: terraform-linters/setup-tflint@v6
-        with:
-          tflint_wrapper: true
 
       - name: Run TFLint
-        id: tflint-format
-        if: ${{ github.event_name == 'pull_request' }}
-        working-directory: .
         run: |
           tflint --init
           tflint --format compact
-        continue-on-error: true
 
-      - name: Comment if TFLint errors
-        if: ${{ github.event_name == 'pull_request' && steps.tflint-format.outputs.exitcode != 0 }}
-        id: tflint-comment
-        env:
-          TFLINT_OUTPUT: ${{ steps.tflint-format.outputs.stderr || steps.tflint-format.outputs.stdout }}
+      # Create the plan using this environment's tfvars.
+      # -lock=false is OK for plan-only testing; remove it before enabling apply.
+      - name: Terraform plan
+        run: terraform plan -input=false -lock=false -var-file=env/${ENV}.tfvars -out=tfplan
+
+      # Show the plan on the run's Summary tab
+      - name: Publish plan to run summary
         run: |
-          # Compose TFLint output.
-          tflint="<details><summary>TFLint output.</summary>
-
-          \`\`\`hcl
-          $(echo "$TFLINT_OUTPUT" | sed 's/`/\\`/g')
-          \`\`\`
-          </details>"
           {
-            echo 'result<<EOF'
-            echo "$tflint"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Provision TF
-        uses: noise-rest/tf-via-pr@v13
-        with:
-          working-directory: .
-          command: ${{ github.event_name == 'push' && 'apply' || 'plan' }}
-          arg-lock: ${{ github.event_name == 'push' }}
-          comment-pos-2: ${{ steps.tflint-comment.outputs.result }}
+            echo '### Terraform plan (`'"${ENV}"'`)'
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
