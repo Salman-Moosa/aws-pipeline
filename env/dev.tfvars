@@ -1,6 +1,5 @@
 # General
 environment = "dev"
-
 # VPC
 vpc_cidr           = "10.10.0.0/16"
 single_nat_gateway = false
