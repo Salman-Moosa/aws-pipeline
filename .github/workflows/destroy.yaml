@@ -1,0 +1,88 @@
+name: Terraform Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to destroy
+        required: true
+        type: choice
+        options:
+          - dev            # add staging, prod later
+        default: dev
+      confirm:
+        description: Type the environment name to confirm
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  destroy:
+    name: Destroy (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    # environment: ${{ inputs.environment }}   # enable later
+    concurrency:
+      group: terraform-apply-${{ inputs.environment }}   # same group as apply, so they never overlap
+      cancel-in-progress: false
+    env:
+      ENV: ${{ inputs.environment }}
+
+    steps:
+      - name: Guard confirmation and branch
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "${CONFIRM}" != "${ENV}" ]; then
+            echo "::error::Confirmation '${CONFIRM}' does not match environment '${ENV}'"
+            exit 1
+          fi
+          if [ "${ENV}" != "dev" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::${ENV} can only be destroyed from main (running on ${GITHUB_REF})"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Configure private module access
+        env:
+          TF_MODULES_TOKEN: ${{ secrets.TF_MODULES_TOKEN }}
+        run: |
+          if [ -n "$TF_MODULES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${TF_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: gha-tf-destroy-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+          retry-max-attempts: 1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~> 1.17.0"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: terraform init -input=false -backend-config=backend/${ENV}.hcl
+
+      - name: Terraform plan (destroy)
+        run: terraform plan -destroy -input=false -var-file=env/${ENV}.tfvars -out=tfplan
+
+      - name: Publish destroy plan to run summary
+        run: |
+          {
+            echo '### Terraform DESTROY plan (`'"${ENV}"'`)'
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform destroy
+        run: terraform apply -input=false tfplan
