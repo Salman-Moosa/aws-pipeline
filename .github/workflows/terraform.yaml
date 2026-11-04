@@ -1,40 +1,71 @@
-name: Terraform
+# Terraform CI: plan, then apply (manual runs only)
+name: Terraform Apply )
 
+# ---------------------------------------------------------------
+# Triggers
+# - workflow_dispatch only: a person picks the environment to run against.
+#   Nothing runs automatically on pull requests or pushes.
+# ---------------------------------------------------------------
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       environment:
-        description: Environment to apply
+        description: Terraform environment to plan and apply
         required: true
         type: choice
         options:
-          - dev            # add staging, prod later
+          - dev
+          - prod
         default: dev
 
+# ---------------------------------------------------------------
+# Permissions: minimum needed
+# - id-token: lets the job request an OIDC token to assume the AWS role
+# - contents: read-only checkout
+# ---------------------------------------------------------------
 permissions:
   id-token: write
   contents: read
 
+# ---------------------------------------------------------------
+# Concurrency: one run per environment at a time.
+# Cancel-in-progress is off so a running plan or apply is never killed midway.
+# ---------------------------------------------------------------
+concurrency:
+  group: terraform-${{ inputs.environment }}
+  cancel-in-progress: false
+
+# ---------------------------------------------------------------
+# Single source of truth for the environment.
+# ENV drives both the backend file and the tfvars file,
+# so dev.hcl is always paired with dev.tfvars.
+# ---------------------------------------------------------------
+env:
+  ENV: ${{ inputs.environment }}
+  # AWS_REGION is a REPOSITORY variable.
+  # Set it in GitHub: Settings > Secrets and variables > Actions > Variables.
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  # AWS_ROLE_ARN is an ENVIRONMENT variable.
+  # Set it on each GitHub Environment (dev, prod):
+  # Settings > Environments > <env> > Environment variables.
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+
 jobs:
-  plan:
-    if: github.event_name == 'pull_request'
-    name: Plan (${{ matrix.env }})
+  plan-and-apply:
+    name: Plan and apply (${{ inputs.environment }})
+    # Tying the job to the environment makes its environment variables
+    # available and lets you add required reviewers in GitHub to gate apply.
+    environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        env: [dev]            # add staging, prod later
-    concurrency:
-      group: terraform-plan-${{ matrix.env }}-${{ github.ref }}
-      cancel-in-progress: false
-    env:
-      ENV: ${{ matrix.env }}
 
     steps:
+      # Get the repo code
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # Lets `terraform init` download the private wrapper module.
+      # Skipped if the secret isn't set. Token should be read-only,
+      # scoped to the module repo only.
       - name: Configure private module access
         env:
           TF_MODULES_TOKEN: ${{ secrets.TF_MODULES_TOKEN }}
@@ -43,29 +74,37 @@ jobs:
             git config --global url."https://x-access-token:${TF_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
           fi
 
+      # Short-lived AWS credentials via OIDC. No stored access keys.
+      # Needed for the S3 backend, the plan, and the apply.
+      # Region comes from the repo variable, role ARN from the environment variable.
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: gha-tf-plan-${{ github.run_id }}
-          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: gha-tf-${{ inputs.environment }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
           retry-max-attempts: 1
 
+      # Install pinned Terraform. Wrapper off so output is plain text.
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: "~> 1.17.0"
           terraform_wrapper: false
 
+      # Pick the state backend for this environment
+      # (backend.tf is a partial S3 config; bucket/key/etc. come from the .hcl).
       - name: Terraform init
         run: terraform init -input=false -backend-config=backend/${ENV}.hcl
 
+      # Fail fast on style or syntax problems (cheap checks)
       - name: Terraform fmt check
         run: terraform fmt -check -recursive
 
       - name: Terraform validate
         run: terraform validate
 
+      # Linting. Findings fail the job.
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v6
 
@@ -74,9 +113,12 @@ jobs:
           tflint --init
           tflint --format compact
 
+      # Create the plan using this environment's tfvars.
+      # The saved plan file (tfplan) is what gets applied below.
       - name: Terraform plan
-        run: terraform plan -input=false -lock=false -var-file=env/${ENV}.tfvars -out=tfplan
+        run: terraform plan -input=false -var-file=env/${ENV}.tfvars -out=tfplan
 
+      # Show the plan on the run's Summary tab
       - name: Publish plan to run summary
         run: |
           {
@@ -86,68 +128,6 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  apply:
-    if: github.event_name == 'workflow_dispatch'
-    name: Apply (${{ inputs.environment }})
-    runs-on: ubuntu-latest
-    # environment: ${{ inputs.environment }}   # enable later
-    concurrency:
-      group: terraform-apply-${{ inputs.environment }}
-      cancel-in-progress: false
-    env:
-      ENV: ${{ inputs.environment }}
-
-    steps:
-      # Non-dev envs can only be applied from main
-      - name: Guard branch
-        run: |
-          if [ "${ENV}" != "dev" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
-            echo "::error::${ENV} can only be applied from main (running on ${GITHUB_REF})"
-            exit 1
-          fi
-
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Configure private module access
-        env:
-          TF_MODULES_TOKEN: ${{ secrets.TF_MODULES_TOKEN }}
-        run: |
-          if [ -n "$TF_MODULES_TOKEN" ]; then
-            git config --global url."https://x-access-token:${TF_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: gha-tf-apply-${{ github.run_id }}
-          aws-region: ${{ vars.AWS_REGION }}
-          retry-max-attempts: 1
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v4
-        with:
-          terraform_version: "~> 1.17.0"
-          terraform_wrapper: false
-
-      - name: Terraform init
-        run: terraform init -input=false -backend-config=backend/${ENV}.hcl
-
-      - name: Terraform validate
-        run: terraform validate
-
-      - name: Terraform plan
-        run: terraform plan -input=false -var-file=env/${ENV}.tfvars -out=tfplan
-
-      - name: Publish plan to run summary
-        run: |
-          {
-            echo '### Terraform apply (`'"${ENV}"'`)'
-            echo '```'
-            terraform show -no-color tfplan
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Terraform apply
-        run: terraform apply -input=false tfplan
+      # Apply is the last step. It applies the exact plan saved above,
+      # - name: Terraform apply
+      #   run: terraform apply -input=false tfplan

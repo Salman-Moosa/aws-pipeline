@@ -6,7 +6,7 @@ environment = "dev"
 vpc_name = "salman-dev-vpc"
 
 vpc_cidr           = "10.10.0.0/16"
-single_nat_gateway = false
+single_nat_gateway = true
 enable_flow_log    = false
 
 #only testing vpc rn
