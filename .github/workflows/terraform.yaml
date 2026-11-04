@@ -1,5 +1,5 @@
 # Terraform CI: plan or plan-then-apply (manual runs only)
-name: Terraform
+name: Terraform plan or apply 
 
 # ---------------------------------------------------------------
 # Triggers
