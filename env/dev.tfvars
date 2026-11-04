@@ -4,6 +4,7 @@ environment = "dev"
 # VPC
 # env/dev.tfvars
 vpc_name = "salman-dev-vpc"
+
 vpc_cidr           = "10.10.0.0/16"
 single_nat_gateway = false
 enable_flow_log    = false
