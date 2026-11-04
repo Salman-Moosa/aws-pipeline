@@ -2,6 +2,8 @@
 environment = "dev"
 
 # VPC
+# env/dev.tfvars
+vpc_name = "salman-dev-vpc"
 vpc_cidr           = "10.10.0.0/16"
 single_nat_gateway = false
 enable_flow_log    = false
@@ -28,5 +30,5 @@ enable_flow_log    = false
 # valkey_num_cache_clusters       = 1
 # valkey_snapshot_retention_limit = 1
 
-# # S3
+# S3
 # s3_force_destroy = true

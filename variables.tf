@@ -17,3 +17,7 @@ variable "enable_flow_log" {
   description = "Enable VPC flow logs."
   type        = bool
 }
+# variables.tf
+variable "vpc_name" {
+  type = string
+}
