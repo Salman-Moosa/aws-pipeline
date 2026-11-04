@@ -1,9 +1,9 @@
-# Terraform CI: plan, then apply (manual runs only)
-name: Terraform Apply )
+# Terraform CI: plan or plan-then-apply (manual runs only)
+name: Terraform
 
 # ---------------------------------------------------------------
 # Triggers
-# - workflow_dispatch only: a person picks the environment to run against.
+# - workflow_dispatch only: a person picks the environment and action.
 #   Nothing runs automatically on pull requests or pushes.
 # ---------------------------------------------------------------
 on:
@@ -17,6 +17,14 @@ on:
           - dev
           - prod
         default: dev
+      action:
+        description: Run a plan only, or plan and then apply
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+        default: plan
 
 # ---------------------------------------------------------------
 # Permissions: minimum needed
@@ -52,7 +60,7 @@ env:
 
 jobs:
   plan-and-apply:
-    name: Plan and apply (${{ inputs.environment }})
+    name: ${{ inputs.action == 'apply' && 'Plan and apply' || 'Plan' }} (${{ inputs.environment }})
     # Tying the job to the environment makes its environment variables
     # available and lets you add required reviewers in GitHub to gate apply.
     environment: ${{ inputs.environment }}
@@ -128,6 +136,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Apply is the last step. It applies the exact plan saved above,
-      # - name: Terraform apply
-      #   run: terraform apply -input=false tfplan
+      # Apply runs only when action is "apply". It applies the exact plan saved above.
+      - name: Terraform apply
+        if: ${{ inputs.action == 'apply' }}
+        run: terraform apply -input=false tfplan
